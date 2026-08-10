@@ -24,25 +24,62 @@ namespace infini_train::kernels::cuda {
     } while (0)
 
 std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
-    // =================================== 作业 ===================================
-    // TODO：实现CUDA上的矩阵乘法前向计算
-    // REF:
-    // =================================== 作业 ===================================
-
-    auto output = std::make_shared<Tensor>();
+    CHECK_GE(input->Dims().size(), 2);
+    CHECK_EQ(input->Dims().size(), other->Dims().size());
+    const auto &a_dims = input->Dims();
+    const auto &b_dims = other->Dims();
+    const int64_t rank = a_dims.size();
+    const int64_t m = a_dims[rank - 2];
+    const int64_t k = a_dims[rank - 1];
+    const int64_t n = b_dims[rank - 1];
+    CHECK_EQ(k, b_dims[rank - 2]);
+    for (int64_t i = 0; i < rank - 2; ++i) CHECK_EQ(a_dims[i], b_dims[i]);
+    const int64_t batch = std::accumulate(a_dims.begin(), a_dims.end() - 2, 1LL, std::multiplies<int64_t>());
+    std::vector<int64_t> out_dims(a_dims.begin(), a_dims.end());
+    out_dims[rank - 1] = n;
+    auto output = std::make_shared<Tensor>(out_dims, DataType::kFLOAT32, input->GetDevice());
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSgemmStridedBatched(
+        handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, static_cast<const float *>(other->DataPtr()), n,
+        k * n, static_cast<const float *>(input->DataPtr()), k, m * k, &beta,
+        static_cast<float *>(output->DataPtr()), n, m * n, batch));
+    CUBLAS_CHECK(cublasDestroy(handle));
     return output;
 }
 
 std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
 MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
                const std::shared_ptr<Tensor> &grad_output) {
-    // =================================== 作业 ===================================
-    // TODO：实现CUDA上的矩阵乘法反向传播
-    // REF:
-    // =================================== 作业 ===================================
-
-    auto grad_input = std::make_shared<Tensor>();
-    auto grad_other = std::make_shared<Tensor>();
+    CHECK_EQ(input->Dims().size(), other->Dims().size());
+    CHECK_EQ(input->Dims().size(), grad_output->Dims().size());
+    const auto &a_dims = input->Dims();
+    const auto &b_dims = other->Dims();
+    const int64_t rank = a_dims.size();
+    const int64_t m = a_dims[rank - 2];
+    const int64_t k = a_dims[rank - 1];
+    const int64_t n = b_dims[rank - 1];
+    CHECK_EQ(k, b_dims[rank - 2]);
+    CHECK_EQ(grad_output->Dims()[rank - 2], m);
+    CHECK_EQ(grad_output->Dims()[rank - 1], n);
+    const int64_t batch = std::accumulate(a_dims.begin(), a_dims.end() - 2, 1LL, std::multiplies<int64_t>());
+    auto grad_input = std::make_shared<Tensor>(a_dims, DataType::kFLOAT32, input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(b_dims, DataType::kFLOAT32, input->GetDevice());
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSgemmStridedBatched(
+        handle, CUBLAS_OP_T, CUBLAS_OP_N, k, m, n, &alpha, static_cast<const float *>(other->DataPtr()), n,
+        k * n, static_cast<const float *>(grad_output->DataPtr()), n, m * n, &beta,
+        static_cast<float *>(grad_input->DataPtr()), k, m * k, batch));
+    CUBLAS_CHECK(cublasSgemmStridedBatched(
+        handle, CUBLAS_OP_N, CUBLAS_OP_T, n, k, m, &alpha, static_cast<const float *>(grad_output->DataPtr()), n,
+        m * n, static_cast<const float *>(input->DataPtr()), k, m * k, &beta,
+        static_cast<float *>(grad_other->DataPtr()), n, k * n, batch));
+    CUBLAS_CHECK(cublasDestroy(handle));
     return {grad_input, grad_other};
 }
 
