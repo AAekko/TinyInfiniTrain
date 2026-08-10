@@ -309,4 +309,4 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
 
 
 #### 遇到问题
-
+误差始终徘徊在0.002左右，达不到0.001的精度
