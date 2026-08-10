@@ -22,13 +22,28 @@ void AccumulateGrad(const std::shared_ptr<Tensor> &gradient, float rate, const s
     AccumulateGradKernel<<<num_blocks, threads_per_block>>>(grad_ptr, rate, tensor_ptr, num_elements);
 }
 
+__global__ void AdamAccumulateGradKernel(const float *grad, float *param, float *m, float *v, size_t num_elements,
+                                         float learning_rate, float beta1, float beta2, float eps, int64_t t) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_elements) return;
+    const float g = grad[idx];
+    m[idx] = beta1 * m[idx] + (1.0f - beta1) * g;
+    v[idx] = beta2 * v[idx] + (1.0f - beta2) * g * g;
+    const float m_hat = m[idx] / (1.0f - powf(beta1, static_cast<float>(t)));
+    const float v_hat = v[idx] / (1.0f - powf(beta2, static_cast<float>(t)));
+    param[idx] -= learning_rate * m_hat / (sqrtf(v_hat) + eps);
+}
+
 void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_ptr<Tensor> &param,
                         const std::shared_ptr<Tensor> &m, const std::shared_ptr<Tensor> &v, float learning_rate,
                         float beta1, float beta2, float eps, int64_t t) {
-    // =================================== 作业 ===================================
-    // TODO：实现Adam优化器的梯度累积和参数更新
-    // REF:
-    // =================================== 作业 ===================================
+    size_t num_elements = grad->NumElements();
+    const int threads_per_block = 256;
+    const int num_blocks = (num_elements + threads_per_block - 1) / threads_per_block;
+    AdamAccumulateGradKernel<<<num_blocks, threads_per_block>>>(
+        static_cast<const float *>(grad->DataPtr()), static_cast<float *>(param->DataPtr()),
+        static_cast<float *>(m->DataPtr()), static_cast<float *>(v->DataPtr()), num_elements, learning_rate,
+        beta1, beta2, eps, t);
 }
 } // namespace infini_train::kernels::cuda
 
