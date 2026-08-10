@@ -61,10 +61,41 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
     | magic(4B) | version(4B) | num_toks(4B) | reserved(1012B) | token数据           |
     ----------------------------------------------------------------------------------
        =================================== 作业 =================================== */
+    CHECK_GT(sequence_length, 0);
+    if (!std::filesystem::exists(path)) {
+        LOG(FATAL) << "File not found: " << path;
+    }
+
+    std::ifstream ifs(path, std::ios::binary);
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    const auto magic = BytesToType<int32_t>(header, 0);
+    CHECK(kTypeMap.contains(magic));
+    const auto type = kTypeMap.at(magic);
+    const auto num_tokens = BytesToType<uint32_t>(header, 8);
+
+    auto token_data = ReadSeveralBytesFromIfstream(num_tokens * kTypeToSize.at(type), &ifs);
+    auto tensor = infini_train::Tensor({static_cast<int64_t>(num_tokens)}, DataType::kINT64);
+    auto *tensor_data = static_cast<int64_t *>(tensor.DataPtr());
+    if (type == TinyShakespeareType::kUINT16) {
+        for (size_t idx = 0; idx < num_tokens; ++idx) {
+            tensor_data[idx] = BytesToType<uint16_t>(token_data, idx * sizeof(uint16_t));
+        }
+    } else {
+        for (size_t idx = 0; idx < num_tokens; ++idx) {
+            tensor_data[idx] = BytesToType<uint32_t>(token_data, idx * sizeof(uint32_t));
+        }
+    }
+
+    return {type,
+            {static_cast<int64_t>((num_tokens - 1) / sequence_length + 1), static_cast<int64_t>(sequence_length)},
+            std::move(tensor)};
 }
 } // namespace
 
-TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length) {
+TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length)
+    : text_file_(ReadTinyShakespeareFile(filepath, sequence_length)), sequence_length_(sequence_length),
+      sequence_size_in_bytes_(sequence_length * sizeof(int64_t)),
+      num_samples_(text_file_.dims[0] - 1) {
     // =================================== 作业 ===================================
     // TODO：初始化数据集实例
     // HINT: 调用ReadTinyShakespeareFile加载数据文件
