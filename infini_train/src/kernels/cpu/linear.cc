@@ -11,25 +11,87 @@
 
 namespace infini_train::kernels::cpu {
 std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
-    // =================================== 作业 ===================================
-    // TODO：实现CPU上的矩阵乘法前向计算
-    // REF:
-    // =================================== 作业 ===================================
+    CHECK_GE(input->Dims().size(), 2);
+    CHECK_EQ(input->Dims().size(), other->Dims().size());
+    CHECK(input->GetDevice().Type() == DeviceType::kCPU);
+    CHECK(other->GetDevice().Type() == DeviceType::kCPU);
+    CHECK(input->Dtype() == DataType::kFLOAT32);
+    CHECK(other->Dtype() == DataType::kFLOAT32);
 
-    auto output = std::make_shared<Tensor>();
-    return {output};
+    const auto &a_dims = input->Dims();
+    const auto &b_dims = other->Dims();
+    const int64_t rank = a_dims.size();
+    const int64_t m = a_dims[rank - 2];
+    const int64_t k = a_dims[rank - 1];
+    const int64_t n = b_dims[rank - 1];
+    CHECK_EQ(k, b_dims[rank - 2]);
+    for (int64_t i = 0; i < rank - 2; ++i) CHECK_EQ(a_dims[i], b_dims[i]);
+
+    std::vector<int64_t> out_dims(a_dims.begin(), a_dims.end());
+    out_dims[rank - 1] = n;
+    auto output = std::make_shared<Tensor>(out_dims, DataType::kFLOAT32, input->GetDevice());
+    const int64_t batch = std::accumulate(a_dims.begin(), a_dims.end() - 2, 1LL, std::multiplies<int64_t>());
+    const float *a = static_cast<const float *>(input->DataPtr());
+    const float *b = static_cast<const float *>(other->DataPtr());
+    float *out = static_cast<float *>(output->DataPtr());
+    for (int64_t batch_idx = 0; batch_idx < batch; ++batch_idx) {
+        const float *a_batch = a + batch_idx * m * k;
+        const float *b_batch = b + batch_idx * k * n;
+        float *out_batch = out + batch_idx * m * n;
+        for (int64_t i = 0; i < m; ++i) {
+            for (int64_t j = 0; j < n; ++j) {
+                float sum = 0.0f;
+                for (int64_t p = 0; p < k; ++p) sum += a_batch[i * k + p] * b_batch[p * n + j];
+                out_batch[i * n + j] = sum;
+            }
+        }
+    }
+    return output;
 }
 
 std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
 MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other,
                const std::shared_ptr<Tensor> &grad_output) {
-    // =================================== 作业 ===================================
-    // TODO：实现CPU上的矩阵乘法反向传播
-    // REF:
-    // =================================== 作业 ===================================
-
-    auto grad_input = std::make_shared<Tensor>();
-    auto grad_other = std::make_shared<Tensor>();
+    CHECK_EQ(input->Dims().size(), other->Dims().size());
+    CHECK_EQ(input->Dims().size(), grad_output->Dims().size());
+    const auto &a_dims = input->Dims();
+    const auto &b_dims = other->Dims();
+    const int64_t rank = a_dims.size();
+    const int64_t m = a_dims[rank - 2];
+    const int64_t k = a_dims[rank - 1];
+    const int64_t n = b_dims[rank - 1];
+    CHECK_EQ(k, b_dims[rank - 2]);
+    CHECK_EQ(grad_output->Dims()[rank - 2], m);
+    CHECK_EQ(grad_output->Dims()[rank - 1], n);
+    auto grad_input = std::make_shared<Tensor>(a_dims, DataType::kFLOAT32, input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(b_dims, DataType::kFLOAT32, input->GetDevice());
+    const int64_t batch = std::accumulate(a_dims.begin(), a_dims.end() - 2, 1LL, std::multiplies<int64_t>());
+    const float *a = static_cast<const float *>(input->DataPtr());
+    const float *b = static_cast<const float *>(other->DataPtr());
+    const float *g = static_cast<const float *>(grad_output->DataPtr());
+    float *ga = static_cast<float *>(grad_input->DataPtr());
+    float *gb = static_cast<float *>(grad_other->DataPtr());
+    for (int64_t batch_idx = 0; batch_idx < batch; ++batch_idx) {
+        const float *a_batch = a + batch_idx * m * k;
+        const float *b_batch = b + batch_idx * k * n;
+        const float *g_batch = g + batch_idx * m * n;
+        float *ga_batch = ga + batch_idx * m * k;
+        float *gb_batch = gb + batch_idx * k * n;
+        for (int64_t i = 0; i < m; ++i) {
+            for (int64_t p = 0; p < k; ++p) {
+                float sum = 0.0f;
+                for (int64_t j = 0; j < n; ++j) sum += g_batch[i * n + j] * b_batch[p * n + j];
+                ga_batch[i * k + p] = sum;
+            }
+        }
+        for (int64_t p = 0; p < k; ++p) {
+            for (int64_t j = 0; j < n; ++j) {
+                float sum = 0.0f;
+                for (int64_t i = 0; i < m; ++i) sum += a_batch[i * k + p] * g_batch[i * n + j];
+                gb_batch[p * n + j] = sum;
+            }
+        }
+    }
     return {grad_input, grad_other};
 }
 
