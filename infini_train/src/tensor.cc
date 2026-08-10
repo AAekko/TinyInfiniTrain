@@ -283,7 +283,18 @@ std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
     // HINT:
     // =================================== 作业 ===================================
 
-    return std::make_shared<Tensor>();
+    const int64_t num_dims = dims_.size();
+    if (start < 0) { start += num_dims; }
+    if (end < 0) { end += num_dims; }
+    CHECK_GE(start, 0);
+    CHECK_LE(start, end);
+    CHECK_LT(end, num_dims);
+
+    std::vector<int64_t> new_shape(dims_.begin(), dims_.begin() + start);
+    new_shape.push_back(std::accumulate(dims_.begin() + start, dims_.begin() + end + 1, 1,
+                                        std::multiplies<int64_t>()));
+    new_shape.insert(new_shape.end(), dims_.begin() + end + 1, dims_.end());
+    return Contiguous()->View(new_shape);
 }
 
 std::shared_ptr<Tensor> Tensor::Squeeze(int64_t dim) {
@@ -358,6 +369,14 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
     // TODO：实现自动微分反向传播
     // 功能描述：1. 计算当前张量对叶子节点的梯度    2. 支持多输出场景的梯度累加
     // =================================== 作业 ===================================
+    CHECK(grad_fn_) << "Cannot call Backward on a tensor that has no grad function";
+    if (!gradient) {
+        CHECK_EQ(NumElements(), 1) << "Gradient can be implicitly created only for scalar outputs";
+        gradient = std::make_shared<Tensor>(dims_, dtype_, GetDevice());
+        gradient->Fill<float>(1.0f);
+    }
+    CHECK(gradient->Dims() == dims_);
+    grad_fn_->BackwardPartial(gradient, output_idx_);
 }
 
 void Tensor::ZeroGrad() {
