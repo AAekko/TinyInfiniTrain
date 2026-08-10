@@ -78,6 +78,24 @@ Tokenizer::Tokenizer(const std::string &filepath) {
     | magic(4B) | version(4B) | vocab_size(4B) | reserved(1012B) | token词表数据       |
     ----------------------------------------------------------------------------------
     ===================================== 作业 ===================================== */
+    if (!std::filesystem::exists(filepath)) {
+        LOG(FATAL) << "File not found: " << filepath;
+    }
+
+    std::ifstream ifs(filepath, std::ios::binary);
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    magic_number_ = BytesToType<uint32_t>(header, 0);
+    CHECK(kEotMap.contains(magic_number_));
+    const auto version = BytesToType<Version>(header, 4);
+    CHECK(version == Version::kV1 || version == Version::kV2);
+    vocab_size_ = BytesToType<uint32_t>(header, 8);
+    token_table_.reserve(vocab_size_);
+    for (uint32_t idx = 0; idx < vocab_size_; ++idx) {
+        const auto token_length = BytesToType<uint8_t>(ReadSeveralBytesFromIfstream(1, &ifs), 0);
+        const auto token_bytes = ReadSeveralBytesFromIfstream(token_length, &ifs);
+        token_table_.emplace_back(reinterpret_cast<const char *>(token_bytes.data()), token_bytes.size());
+    }
+    eot_token_ = kEotMap.at(magic_number_);
 }
 
 std::string Tokenizer::Decode(uint32_t token_id) const {
@@ -85,7 +103,8 @@ std::string Tokenizer::Decode(uint32_t token_id) const {
     TODO：实现token_id到文本的转换
     功能描述：根据token_id返回对应的文本片段
     ===================================== 作业 ===================================== */
-    return "";
+    CHECK_LT(token_id, token_table_.size());
+    return token_table_[token_id];
 }
 
 void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_size, uint32_t sequence_length,
@@ -111,6 +130,27 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
         TODO：实现单步文本生成逻辑
         HINT：调用model.Forward推理获取logits，根据推理结果进行随机采样，调用Decode获取文本结果
         ===================================== 作业 ===================================== */
+    if (t == prompt_len) { kRngState = infini_train::kRngState; }
+        auto logits = model.Forward({x})[0];
+        auto probabilities = nn::function::Softmax(logits, -1)->To(Device(DeviceType::kCPU, 0));
+        const int64_t vocab_size = probabilities.Dims().back();
+        const int64_t time_step = std::min<int64_t>(t - 1, sequence_length - 1);
+        float *probabilities_data = static_cast<float *>(probabilities.DataPtr()) + time_step * vocab_size;
+        const int next_token = SampleMult(probabilities_data, vocab_size, RandomF32(kRngState));
+        std::cout << Decode(next_token);
+
+        auto x_cpu = x->To(Device(DeviceType::kCPU, 0));
+        auto *x_data = static_cast<int64_t *>(x_cpu.DataPtr());
+        for (uint32_t batch = 0; batch < batch_size; ++batch) {
+            if (t < sequence_length) {
+                x_data[batch * sequence_length + t] = next_token;
+            } else {
+                std::memmove(x_data + batch * sequence_length, x_data + batch * sequence_length + 1,
+                             (sequence_length - 1) * sizeof(int64_t));
+                x_data[(batch + 1) * sequence_length - 1] = next_token;
+            }
+        }
+        x = std::make_shared<infini_train::Tensor>(x_cpu.To(device));
     }
     std::cout << std::endl;
 }
