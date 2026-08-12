@@ -515,7 +515,21 @@ std::string Tokenizer::Decode(uint32_t token_id) const {
 ```c++
 void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_size, uint32_t sequence_length,
                              uint32_t text_length, Device device) const {
-    /* ...原代码... */
+    std::vector<int64_t> dims;
+    dims.assign({batch_size, sequence_length});
+    // x_tensor (FLAGS_batch_size, FLAGS_sequence_length) eq:(4, 64)
+    infini_train::Tensor x_tensor = infini_train::Tensor(dims, DataType::kINT64);
+    int64_t *x_buff = static_cast<int64_t *>(x_tensor.DataPtr());
+    for (int i = 0; i < batch_size * sequence_length; ++i) { x_buff[i] = eot_token_; }
+
+    // Give some contexts: "The meaning of life is "
+    auto prompt = kPromptMap.at(magic_number_);
+    auto prompt_len = prompt.size();
+    for (int i = 0; i < prompt_len; ++i) { x_buff[i] = prompt[i]; }
+    std::cout << "The meaning of life is";
+
+    auto x = std::make_shared<infini_train::Tensor>(x_tensor.To(device));
+    uint64_t kRngState = kRngState;
     LOG(INFO) << "start generate text:";
     for (int t = prompt_len; t < text_length; t++) {
         /* ===================================== 作业 =====================================
