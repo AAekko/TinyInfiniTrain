@@ -1,6 +1,7 @@
 # TinyInfiniTrain 作业报告
 
 ## 一、test 通过截图
+![Uploading test.png…]()
 
 ## 二、作业步骤
 
