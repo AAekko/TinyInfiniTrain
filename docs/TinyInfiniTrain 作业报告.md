@@ -215,8 +215,8 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 将输入张量视为 `[..., M, K]`，另一个张量视为 `[..., K, N]`，输出形状为 `[..., M, N]`。实现时先检查两个张量的维数、批次维度和矩阵乘法的收缩维度是否匹配，再把前面的所有批次维度相乘得到 `batch_size`。
 
 CPU 端使用 Eigen 的 RowMajor `Map` 将每一批连续内存映射为矩阵，逐批计算 `C = A * B`。反向传播根据链式法则计算：
-grad_input = grad_output * other^T
-grad_other = input^T * grad_output
+grad_input = grad_output * other^T;
+grad_other = input^T * grad_output;
 
 CUDA 端使用 `cublasSgemmStridedBatched` 一次处理所有批次。由于项目张量采用行主序，而 cuBLAS 按列主序解释矩阵，调用时利用 `(A * B)^T = B^T * A^T`，交换两个输入在 cuBLAS 接口中的位置，并将输出矩阵的行列参数写成 `N, M, K`。反向传播分别配置转置参数计算两个梯度，同时为输入、输出和批次设置正确的 leading dimension 与 stride。
 
