@@ -20,24 +20,36 @@
 std::vector<std::shared_ptr<Tensor>> Neg::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
     // =================================== 作业 ===================================
     // TODO：通过Dispatcher获取设备专属kernel，对输入张量进行取反操作
-    // HINT: 依赖test_dispatcher，kernel实现已给出
+    // NOTES: 依赖test_dispatcher，Neg kernel实现已给出
     // =================================== 作业 ===================================
+    CHECK_EQ(input_tensors.size(), 1);
+    const auto &input = input_tensors[0];
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "NegForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
+
 
 std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     // =================================== 作业 ===================================
     // TODO：通过Dispatcher获取设备专属的反向传播kernel，计算梯度
-    // HINT: 依赖test_dispatcher，kernel实现已给出
+    // NOTES: 依赖test_dispatcher，Neg的kernel实现已给出
     // =================================== 作业 ===================================
+    CHECK_EQ(grad_outputs.size(), 1);
+    const auto &grad_output = grad_outputs[0];
+    auto device = grad_output->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "NegBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output)};
 }
 ```
 
 #### 解决思路
-
-
+保持名称与注册名称完全一致
+前向：NegForward
+反向：NegBackward
 
 #### 遇到问题
-
+误将 Dispatcher 的 key 写错
 
 
 ### 作业二：实现矩阵乘法
@@ -206,6 +218,9 @@ template <typename RetT, class... ArgsT> RetT Call(ArgsT... args) const {
     // 功能描述：将存储的函数指针转换为指定类型并调用
     // HINT: 
     // =================================== 作业 ===================================
+    using FuncT = RetT (*)(ArgsT...);
+    // TODO: 实现函数调用逻辑
+    return reinterpret_cast<FuncT>(func_ptr_)(args...);
 }
 
 template <typename FuncT> void Register(const KeyT &key, FuncT &&kernel) {
@@ -213,13 +228,20 @@ template <typename FuncT> void Register(const KeyT &key, FuncT &&kernel) {
     // TODO：实现kernel注册机制
     // 功能描述：将kernel函数与设备类型、名称绑定
     // =================================== 作业 ===================================
+    CHECK(!key_to_kernel_map_.contains(key))
+        << "Kernel already registered: " << key.second << " on device: " << static_cast<int>(key.first);
+    key_to_kernel_map_.emplace(key, KernelFunction(std::forward<FuncT>(kernel)));
 }
 
-#define REGISTER_KERNEL(device, kernel_name, kernel_func) \
+#define REGISTER_KERNEL(device, kernel_name, kernel_func) 
     // =================================== 作业 ===================================
     // TODO：实现自动注册宏
     // 功能描述：在全局静态区注册kernel，避免显式初始化代码
     // =================================== 作业 ===================================
+    static const bool REGISTER_KERNEL_CONCAT(kernel_registered_, __COUNTER__) = []() {                                \
+        infini_train::Dispatcher::Instance().Register({device, #kernel_name}, kernel_func);                            \
+        return true;                                                                                                   \
+    }();
 ```
 
 #### 解决思路
