@@ -47,7 +47,7 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 `Neg` 本身不负责具体的数值计算，而是作为 autograd 层与设备 kernel 层之间的桥梁。前向传播首先检查输入张量数量为 1，再从输入张量取得设备类型，以 `(DeviceType, "NegForward")` 为键从 `Dispatcher` 中取得对应 kernel，最后通过 `KernelFunction::Call` 调用并将结果包装成单元素 `vector` 返回。反向传播采用相同流程，不过设备类型从上游梯度 `grad_output` 获取，并调用 `NegBackward` kernel。由于取反函数的导数恒为 `-1`，具体的梯度取反运算由已经提供的 kernel 完成，autograd 层只负责正确分发。
 
 #### 遇到问题
-无
+刚开以为要在 `Neg::Forward` 和 `Neg::Backward` 中自己遍历张量并完成取反。后来注意到是通过 Dispatcher 找到已经注册好的 kernel。
 
 
 ### 作业二：实现矩阵乘法
@@ -225,7 +225,7 @@ CUDA 端使用 `cublasSgemmStridedBatched` 一次处理所有批次。由于项�
 
 
 #### 遇到问题
-
+一开始只考虑了二维输入，没有注意测试中还存在批次维度。后来查看张量形状后，把最后两维看作真正参与矩阵乘法的 `M、K、N`，再把前面所有维度的乘积作为 `batch_size`，这样二维和多维输入就可以使用同一套逻辑。
 
 
 ### 作业三：实现Adam优化器
@@ -301,7 +301,7 @@ CPU 端先计算两个偏差修正系数，再遍历张量元素，原地更新 
 
 
 #### 遇到问题
-
+无
 
 
 ### 作业四：实现Tensor基础操作
@@ -368,7 +368,7 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
 
 
 #### 遇到问题
-
+无
 
 
 ### 作业五 注册算子kernel的实现
@@ -421,7 +421,7 @@ template <typename FuncT> void Register(const KeyT &key, FuncT &&kernel) {
 
 
 #### 遇到问题
-
+实现注册宏时，最初只想到定义一个全局变量来触发注册，没有考虑同一个文件中会注册很多 kernel，如果变量名相同就会发生重定义。最后使用两层拼接宏配合 `__COUNTER__` 生成唯一变量名，并通过立即执行的 lambda 在 `main` 之前完成注册。
 
 
 ### 作业六：实现GPT-2整体训练
@@ -595,10 +595,9 @@ Tokenizer 同样先解析 1024 字节头部，校验 magic 和版本并读取词
 
 
 #### 遇到问题
-多次测试总是在模型输出的第 385973 个数据点上出现误差在0.002左右，达不到0.001的精度
-二进制文件解析必须严格按字节偏移和实际 token 宽度读取，不能把文件中的 `uint16_t` 数据直接当作框架的 `int64_t` Tensor。构造训练样本时，标签需要相对输入偏移一个 token；同时最后一个序列块无法再提供完整的下一 token 标签，因此样本数要减 1。Tokenizer 的 token 是任意字节序列，不一定是以 `\0` 结尾的普通 C 字符串，所以构造 `std::string` 时必须显式传入长度。
+一开始经过多次测试总是在模型输出的第 385973 个数据点上出现误差在0.002左右，达不到0.001的精度。然后在服务器上修改了测试文件发现每次都是同样三个点误差达不到精度。
+<img width="1232" height="51" alt="image" src="https://github.com/user-attachments/assets/4baf4864-611b-4312-9a7f-636351fe6b5b" />
+考虑到每次都是固定几个点出问题，故考虑是显卡型号问题，先后用用4090和5090对作业6进行测试，发现误差点一样但是误差值不一样，于是考虑用A100进行测试，这次顺利通过。
 
-部署测试时还遇到了数据文件和运行目录问题：`test_gpt2` 使用相对于 `build/Release` 的路径读取 `Data/gpt2_124M.bin`、Tokenizer、训练集和参考 logits，缺少文件时会直接终止；下载脚本中的部分可选上游文件已经失效，因此实际只下载并核对测试所需文件。
-
-此外，RTX 4090 和 RTX 5090 上最终有少量固定采样点的绝对误差略高于 `1e-3`，而同一份代码和数据在 A100 上通过了全部 100 个采样点。项目中的矩阵乘依赖 cuBLAS，LayerNorm、Softmax 和梯度计算还包含并行归约及 `atomicAdd`。不同 GPU 架构可能选择不同的计算与归约顺序，浮点舍入差异经过 12 层网络和多次参数更新后会累积到 logits；参考结果的数值路径与 A100 更一致。因此最终使用仓库原生支持的 A100 `sm_80` 环境完成验证，没有修改测试阈值或参考数据。
+RTX 4090 和 RTX 5090 上最终有少量固定采样点的绝对误差略高于 `1e-3`，而同一份代码和数据在 A100 上通过了全部 100 个采样点。考虑可能原因是：项目中的矩阵乘依赖 cuBLAS，LayerNorm、Softmax 和梯度计算还包含并行归约及 `atomicAdd`。不同 GPU 架构可能选择不同的计算与归约顺序，浮点舍入差异经过 12 层网络和多次参数更新后会累积到 logits；参考结果的数值路径与 A100 更一致。
 
