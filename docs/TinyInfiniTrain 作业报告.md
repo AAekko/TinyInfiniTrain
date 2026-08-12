@@ -44,10 +44,10 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 ```
 
 #### 解决思路
-
+`Neg` 本身不负责具体的数值计算，而是作为 autograd 层与设备 kernel 层之间的桥梁。前向传播首先检查输入张量数量为 1，再从输入张量取得设备类型，以 `(DeviceType, "NegForward")` 为键从 `Dispatcher` 中取得对应 kernel，最后通过 `KernelFunction::Call` 调用并将结果包装成单元素 `vector` 返回。反向传播采用相同流程，不过设备类型从上游梯度 `grad_output` 获取，并调用 `NegBackward` kernel。由于取反函数的导数恒为 `-1`，具体的梯度取反运算由已经提供的 kernel 完成，autograd 层只负责正确分发。
 
 #### 遇到问题
-
+无
 
 
 ### 作业二：实现矩阵乘法
@@ -212,6 +212,13 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 
 #### 解决思路
 
+将输入张量视为 `[..., M, K]`，另一个张量视为 `[..., K, N]`，输出形状为 `[..., M, N]`。实现时先检查两个张量的维数、批次维度和矩阵乘法的收缩维度是否匹配，再把前面的所有批次维度相乘得到 `batch_size`。
+
+CPU 端使用 Eigen 的 RowMajor `Map` 将每一批连续内存映射为矩阵，逐批计算 `C = A * B`。反向传播根据链式法则计算：
+grad_input = grad_output * other^T
+grad_other = input^T * grad_output
+
+CUDA 端使用 `cublasSgemmStridedBatched` 一次处理所有批次。由于项目张量采用行主序，而 cuBLAS 按列主序解释矩阵，调用时利用 `(A * B)^T = B^T * A^T`，交换两个输入在 cuBLAS 接口中的位置，并将输出矩阵的行列参数写成 `N, M, K`。反向传播分别配置转置参数计算两个梯度，同时为输入、输出和批次设置正确的 leading dimension 与 stride。
 
 
 #### 遇到问题
@@ -277,7 +284,14 @@ void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_p
 ```
 
 #### 解决思路
+Adam 对每个参数元素维护一阶矩 `m` 和二阶矩 `v`。第 `t` 次更新按照以下公式计算：
+m = beta1 * m + (1 - beta1) * grad
+v = beta2 * v + (1 - beta2) * grad^2
+m_hat = m / (1 - beta1^t)
+v_hat = v / (1 - beta2^t)
+param = param - learning_rate * m_hat / (sqrt(v_hat) + eps)
 
+CPU 端先计算两个偏差修正系数，再遍历张量元素，原地更新 `m`、`v` 和 `param`。CUDA 端实现一维 kernel，每个线程负责一个元素，通过 `blockIdx.x * blockDim.x + threadIdx.x` 得到下标，并进行越界检查；主机函数根据元素数量计算 grid 大小并传入张量设备指针。CPU 和 CUDA kernel 最后都以 `AdamAccumulateGrad` 名称注册到 Dispatcher，使优化器可以按参数所在设备调用相应实现。
 
 
 #### 遇到问题
@@ -342,7 +356,9 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
 ```
 
 #### 解决思路
+`Flatten` 先将负下标转换为对应的正下标，并检查 `0 <= start <= end < ndim`。新形状由三部分组成：`start` 之前的维度、区间 `[start, end]` 内所有维度的乘积，以及 `end` 之后的维度。由于测试包含非连续张量，先调用 `Contiguous()` 生成连续内存，再用 `View(new_shape)` 改变形状，这样既保证数据顺序正确，也能继续通过 `NoOp` autograd 节点传播梯度。
 
+`Tensor::Backward` 的职责是为反向传播提供初始梯度并进入已有的计算图机制。若调用者没有传入梯度，则只允许当前张量为标量，并创建一个全 1 的同形状梯度；若显式传入梯度，则检查其形状与当前输出一致。随后调用当前张量的 `grad_fn_->BackwardPartial(gradient, output_idx_)`。具体的依赖计数、多输出梯度收集、同一节点多路径累加以及向叶子节点写入梯度，统一由 `Function::BackwardPartial` 和 `AccumulateGrad` 完成。
 
 
 #### 遇到问题
@@ -391,7 +407,11 @@ template <typename FuncT> void Register(const KeyT &key, FuncT &&kernel) {
 ```
 
 #### 解决思路
+`KernelFunction` 使用 `void *` 保存不同签名的 kernel 函数指针，实现简单的类型擦除。调用时由模板参数构造目标函数指针类型 `RetT (*)(ArgsT...)`，将保存的指针转换回该类型后传入参数执行。
 
+`Dispatcher` 使用 `(DeviceType, kernel_name)` 作为 `std::map` 的键。注册时先检查键是否已经存在，防止同一设备上的同名 kernel 被覆盖，再通过 `std::forward` 和 `emplace` 保存函数。查询时检查目标键存在，然后返回对应的 `KernelFunction`。
+
+自动注册宏在全局静态区定义一个布尔变量，并用立即执行的 lambda 调用 `Dispatcher::Instance().Register(...)`。宏通过 `#kernel_name` 得到字符串键，通过 `__COUNTER__` 和两层拼接宏生成当前翻译单元内唯一的变量名。这样 CPU、CUDA kernel 会在程序进入 `main` 前完成注册，无需维护集中式初始化列表。
 
 
 #### 遇到问题
@@ -561,7 +581,11 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
 ```
 
 #### 解决思路
+数据集读取首先打开二进制文件并读取固定的 1024 字节头部，从偏移 0 解析 magic，从偏移 8 解析 token 数量。magic 用于区分 GPT-2 的 `uint16_t` token 和 LLaMA 3 的 `uint32_t` token。随后按 token 类型读取数据区，并逐个转换为框架统一使用的 `int64_t` Tensor。根据 `sequence_length` 计算逻辑形状，数据集构造函数保存每个序列占用的字节数，并将可用样本数设为序列块数减 1。取样时 `x` 从当前位置开始，`y` 从后一个 token 开始，通过共享底层存储、偏移一个 `int64_t` 构造语言模型的输入与标签。
 
+Tokenizer 同样先解析 1024 字节头部，校验 magic 和版本并读取词表大小。词表区的每个 token 由 1 字节长度和对应数量的原始字节组成，因此逐项读取并保存为 `std::string`，同时根据 magic 设置 EOT token。`Decode` 检查 token id 范围后直接查询词表。
+
+文本生成时先用固定 prompt 和 EOT 初始化上下文，每一步调用模型前向得到 logits，在最后一维做 Softmax，并将概率复制到 CPU。然后取当前时间步对应的词表分布，使用固定种子的随机数进行多项式采样，调用 `Decode` 输出文本。新 token 写回上下文；超过最大序列长度后将窗口左移一位，再把新 token 放到末尾，最后将输入重新复制到目标设备。端到端测试则加载 GPT-2 权重和 Tiny Shakespeare 数据，完成多步前向、反向和参数更新，最后抽样比较 logits 与参考文件。
 
 
 #### 遇到问题
