@@ -1,7 +1,8 @@
 # TinyInfiniTrain 作业报告
 
 ## 一、test 通过截图
-![Uploading test.png…]()
+<img width="1053" height="664" alt="image" src="https://github.com/user-attachments/assets/2ac35c5b-4201-4438-92f3-c68c4563f3c3" />
+
 
 ## 二、作业步骤
 
