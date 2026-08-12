@@ -68,6 +68,31 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
         // TODO：实现CPU上的矩阵乘法前向计算
         // REF:
         // =================================== 作业 ===================================
+    const auto &input_dims = input->Dims();
+    const auto &other_dims = other->Dims();
+    CHECK_EQ(input_dims.size(), other_dims.size());
+    CHECK_GE(input_dims.size(), 2);
+    CHECK_EQ(input_dims.back(), other_dims[other_dims.size() - 2]);
+    for (int64_t idx = 0; idx < input_dims.size() - 2; ++idx) { CHECK_EQ(input_dims[idx], other_dims[idx]); }
+
+    auto output_dims = input_dims;
+    output_dims.back() = other_dims.back();
+    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32, input->GetDevice());
+
+    const int64_t batch_size
+        = std::accumulate(input_dims.begin(), input_dims.end() - 2, 1, std::multiplies<int64_t>());
+    const int64_t rows = input_dims[input_dims.size() - 2];
+    const int64_t inner = input_dims.back();
+    const int64_t cols = other_dims.back();
+    using MatrixMap = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+    using MutableMatrixMap = Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+    for (int64_t batch = 0; batch < batch_size; ++batch) {
+        MatrixMap input_matrix(static_cast<const float *>(input->DataPtr()) + batch * rows * inner, rows, inner);
+        MatrixMap other_matrix(static_cast<const float *>(other->DataPtr()) + batch * inner * cols, inner, cols);
+        MutableMatrixMap output_matrix(static_cast<float *>(output->DataPtr()) + batch * rows * cols, rows, cols);
+        output_matrix = input_matrix * other_matrix;
+    }
+    return output;
     }
 
     std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
@@ -77,6 +102,34 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
         // TODO：实现CPU上的矩阵乘法反向传播
         // REF:
         // =================================== 作业 ===================================
+    const auto &input_dims = input->Dims();
+    const auto &other_dims = other->Dims();
+    CHECK_EQ(input_dims.size(), other_dims.size());
+    CHECK_GE(input_dims.size(), 2);
+    CHECK_EQ(input_dims.back(), other_dims[other_dims.size() - 2]);
+
+    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32, other->GetDevice());
+    const int64_t batch_size
+        = std::accumulate(input_dims.begin(), input_dims.end() - 2, 1, std::multiplies<int64_t>());
+    const int64_t rows = input_dims[input_dims.size() - 2];
+    const int64_t inner = input_dims.back();
+    const int64_t cols = other_dims.back();
+    using MatrixMap = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+    using MutableMatrixMap = Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>;
+    for (int64_t batch = 0; batch < batch_size; ++batch) {
+        MatrixMap input_matrix(static_cast<const float *>(input->DataPtr()) + batch * rows * inner, rows, inner);
+        MatrixMap other_matrix(static_cast<const float *>(other->DataPtr()) + batch * inner * cols, inner, cols);
+        MatrixMap grad_output_matrix(
+            static_cast<const float *>(grad_output->DataPtr()) + batch * rows * cols, rows, cols);
+        MutableMatrixMap grad_input_matrix(
+            static_cast<float *>(grad_input->DataPtr()) + batch * rows * inner, rows, inner);
+        MutableMatrixMap grad_other_matrix(
+            static_cast<float *>(grad_other->DataPtr()) + batch * inner * cols, inner, cols);
+        grad_input_matrix = grad_output_matrix * other_matrix.transpose();
+        grad_other_matrix = input_matrix.transpose() * grad_output_matrix;
+    }
+    return {grad_input, grad_other};
     }
 ```
 
@@ -92,6 +145,32 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
         // TODO：实现CUDA上的矩阵乘法前向计算
         // REF:
         // =================================== 作业 ===================================
+    const auto &input_dims = input->Dims();
+    const auto &other_dims = other->Dims();
+    CHECK_EQ(input_dims.size(), other_dims.size());
+    CHECK_GE(input_dims.size(), 2);
+    CHECK_EQ(input_dims.back(), other_dims[other_dims.size() - 2]);
+    for (int64_t idx = 0; idx < input_dims.size() - 2; ++idx) { CHECK_EQ(input_dims[idx], other_dims[idx]); }
+
+    auto output_dims = input_dims;
+    output_dims.back() = other_dims.back();
+    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32, input->GetDevice());
+    const int64_t batch_size
+        = std::accumulate(input_dims.begin(), input_dims.end() - 2, 1, std::multiplies<int64_t>());
+    const int64_t rows = input_dims[input_dims.size() - 2];
+    const int64_t inner = input_dims.back();
+    const int64_t cols = other_dims.back();
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSgemmStridedBatched(
+        handle, CUBLAS_OP_N, CUBLAS_OP_N, cols, rows, inner, &alpha,
+        static_cast<const float *>(other->DataPtr()), cols, inner * cols,
+        static_cast<const float *>(input->DataPtr()), inner, rows * inner, &beta,
+        static_cast<float *>(output->DataPtr()), cols, rows * cols, batch_size));
+    CUBLAS_CHECK(cublasDestroy(handle));
+    return output;
     }
 
     std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
@@ -101,6 +180,35 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
         // TODO：实现CUDA上的矩阵乘法反向传播
         // REF:
         // =================================== 作业 ===================================
+    const auto &input_dims = input->Dims();
+    const auto &other_dims = other->Dims();
+    CHECK_EQ(input_dims.size(), other_dims.size());
+    CHECK_GE(input_dims.size(), 2);
+    CHECK_EQ(input_dims.back(), other_dims[other_dims.size() - 2]);
+
+    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32, other->GetDevice());
+    const int64_t batch_size
+        = std::accumulate(input_dims.begin(), input_dims.end() - 2, 1, std::multiplies<int64_t>());
+    const int64_t rows = input_dims[input_dims.size() - 2];
+    const int64_t inner = input_dims.back();
+    const int64_t cols = other_dims.back();
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSgemmStridedBatched(
+        handle, CUBLAS_OP_T, CUBLAS_OP_N, inner, rows, cols, &alpha,
+        static_cast<const float *>(other->DataPtr()), cols, inner * cols,
+        static_cast<const float *>(grad_output->DataPtr()), cols, rows * cols, &beta,
+        static_cast<float *>(grad_input->DataPtr()), inner, rows * inner, batch_size));
+    CUBLAS_CHECK(cublasSgemmStridedBatched(
+        handle, CUBLAS_OP_N, CUBLAS_OP_T, cols, inner, rows, &alpha,
+        static_cast<const float *>(grad_output->DataPtr()), cols, rows * cols,
+        static_cast<const float *>(input->DataPtr()), inner, rows * inner, &beta,
+        static_cast<float *>(grad_other->DataPtr()), cols, inner * cols, batch_size));
+    CUBLAS_CHECK(cublasDestroy(handle));
+    return {grad_input, grad_other};
     }
 ```
 
@@ -130,6 +238,19 @@ void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_p
     // TODO：实现Adam优化器的梯度累积和参数更新
     // REF: 
     // =================================== 作业 ===================================
+    const float bias_correction1 = 1.0f - std::pow(beta1, t);
+    const float bias_correction2 = 1.0f - std::pow(beta2, t);
+    const auto *grad_ptr = static_cast<const float *>(grad->DataPtr());
+    auto *param_ptr = static_cast<float *>(param->DataPtr());
+    auto *m_ptr = static_cast<float *>(m->DataPtr());
+    auto *v_ptr = static_cast<float *>(v->DataPtr());
+    for (int64_t idx = 0; idx < grad->NumElements(); ++idx) {
+        m_ptr[idx] = beta1 * m_ptr[idx] + (1.0f - beta1) * grad_ptr[idx];
+        v_ptr[idx] = beta2 * v_ptr[idx] + (1.0f - beta2) * grad_ptr[idx] * grad_ptr[idx];
+        const float m_hat = m_ptr[idx] / bias_correction1;
+        const float v_hat = v_ptr[idx] / bias_correction2;
+        param_ptr[idx] -= learning_rate * m_hat / (std::sqrt(v_hat) + eps);
+    }
 }
 ```
 
@@ -147,6 +268,13 @@ void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_p
     // TODO：实现Adam优化器的梯度累积和参数更新
     // REF: 
     // =================================== 作业 ===================================
+    size_t num_elements = grad->NumElements();
+    int threads_per_block = 256;
+    int num_blocks = (num_elements + threads_per_block - 1) / threads_per_block;
+    AdamAccumulateGradKernel<<<num_blocks, threads_per_block>>>(
+        static_cast<const float *>(grad->DataPtr()), static_cast<float *>(param->DataPtr()),
+        static_cast<float *>(m->DataPtr()), static_cast<float *>(v->DataPtr()), learning_rate, beta1, beta2, eps, t,
+        num_elements);
 }
 ```
 
@@ -174,6 +302,18 @@ std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
     // TODO：实现张量扁平化操作，将指定维度范围[start, end]内的所有维度合并为一个维度
     // HINT: 
     // =================================== 作业 ===================================
+    const int64_t num_dims = dims_.size();
+    if (start < 0) { start += num_dims; }
+    if (end < 0) { end += num_dims; }
+    CHECK_GE(start, 0);
+    CHECK_LE(start, end);
+    CHECK_LT(end, num_dims);
+
+    std::vector<int64_t> new_shape(dims_.begin(), dims_.begin() + start);
+    new_shape.push_back(std::accumulate(dims_.begin() + start, dims_.begin() + end + 1, 1,
+                                        std::multiplies<int64_t>()));
+    new_shape.insert(new_shape.end(), dims_.begin() + end + 1, dims_.end());
+    return Contiguous()->View(new_shape);
 }
 ```
 
@@ -192,6 +332,14 @@ void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool 
     // 功能描述：1. 计算当前张量对叶子节点的梯度    2. 支持多输出场景的梯度累加
     // HINT: 
     // =================================== 作业 ===================================
+    CHECK(grad_fn_) << "Cannot call Backward on a tensor that has no grad function";
+    if (!gradient) {
+        CHECK_EQ(NumElements(), 1) << "Gradient can be implicitly created only for scalar outputs";
+        gradient = std::make_shared<Tensor>(dims_, dtype_, GetDevice());
+        gradient->Fill<float>(1.0f);
+    }
+    CHECK(gradient->Dims() == dims_);
+    grad_fn_->BackwardPartial(gradient, output_idx_);
 }
 ```
 
@@ -276,9 +424,40 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
     | magic(4B) | version(4B) | num_toks(4B) | reserved(1012B) | token数据           |
     ----------------------------------------------------------------------------------
        =================================== 作业 =================================== */
+    CHECK_GT(sequence_length, 0);
+    if (!std::filesystem::exists(path)) {
+        LOG(FATAL) << "File not found: " << path;
+    }
+
+    std::ifstream ifs(path, std::ios::binary);
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    const auto magic = BytesToType<int32_t>(header, 0);
+    CHECK(kTypeMap.contains(magic));
+    const auto type = kTypeMap.at(magic);
+    const auto num_tokens = BytesToType<uint32_t>(header, 8);
+
+    auto token_data = ReadSeveralBytesFromIfstream(num_tokens * kTypeToSize.at(type), &ifs);
+    auto tensor = infini_train::Tensor({static_cast<int64_t>(num_tokens)}, DataType::kINT64);
+    auto *tensor_data = static_cast<int64_t *>(tensor.DataPtr());
+    if (type == TinyShakespeareType::kUINT16) {
+        for (size_t idx = 0; idx < num_tokens; ++idx) {
+            tensor_data[idx] = BytesToType<uint16_t>(token_data, idx * sizeof(uint16_t));
+        }
+    } else {
+        for (size_t idx = 0; idx < num_tokens; ++idx) {
+            tensor_data[idx] = BytesToType<uint32_t>(token_data, idx * sizeof(uint32_t));
+        }
+    }
+
+    return {type,
+            {static_cast<int64_t>((num_tokens - 1) / sequence_length + 1), static_cast<int64_t>(sequence_length)},
+            std::move(tensor)};
 }
 
-TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length) {
+TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length)
+    : text_file_(ReadTinyShakespeareFile(filepath, sequence_length)), sequence_length_(sequence_length),
+      sequence_size_in_bytes_(sequence_length * sizeof(int64_t)),
+      num_samples_(text_file_.dims[0] - 1) {
     // =================================== 作业 ===================================
     // TODO：初始化数据集实例
     // HINT: 调用ReadTinyShakespeareFile加载数据文件
@@ -301,6 +480,24 @@ Tokenizer::Tokenizer(const std::string &filepath) {
     | magic(4B) | version(4B) | vocab_size(4B) | reserved(1012B) | token词表数据       |
     ----------------------------------------------------------------------------------
     ===================================== 作业 ===================================== */
+    if (!std::filesystem::exists(filepath)) {
+        LOG(FATAL) << "File not found: " << filepath;
+    }
+
+    std::ifstream ifs(filepath, std::ios::binary);
+    const auto header = ReadSeveralBytesFromIfstream(1024, &ifs);
+    magic_number_ = BytesToType<uint32_t>(header, 0);
+    CHECK(kEotMap.contains(magic_number_));
+    const auto version = BytesToType<Version>(header, 4);
+    CHECK(version == Version::kV1 || version == Version::kV2);
+    vocab_size_ = BytesToType<uint32_t>(header, 8);
+    token_table_.reserve(vocab_size_);
+    for (uint32_t idx = 0; idx < vocab_size_; ++idx) {
+        const auto token_length = BytesToType<uint8_t>(ReadSeveralBytesFromIfstream(1, &ifs), 0);
+        const auto token_bytes = ReadSeveralBytesFromIfstream(token_length, &ifs);
+        token_table_.emplace_back(reinterpret_cast<const char *>(token_bytes.data()), token_bytes.size());
+    }
+    eot_token_ = kEotMap.at(magic_number_);
 }
 ```
 
@@ -310,6 +507,8 @@ std::string Tokenizer::Decode(uint32_t token_id) const {
     TODO：实现token_id到文本的转换
     功能描述：根据token_id返回对应的文本片段
     ===================================== 作业 ===================================== */
+    CHECK_LT(token_id, token_table_.size());
+    return token_table_[token_id];
 }
 ```
 
@@ -323,6 +522,27 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
         TODO：实现单步文本生成逻辑
         HINT：调用model.Forward推理获取logits，根据推理结果进行随机采样，调用Decode获取文本结果
         ===================================== 作业 ===================================== */
+    if (t == prompt_len) { kRngState = infini_train::kRngState; }
+        auto logits = model.Forward({x})[0];
+        auto probabilities = nn::function::Softmax(logits, -1)->To(Device(DeviceType::kCPU, 0));
+        const int64_t vocab_size = probabilities.Dims().back();
+        const int64_t time_step = std::min<int64_t>(t - 1, sequence_length - 1);
+        float *probabilities_data = static_cast<float *>(probabilities.DataPtr()) + time_step * vocab_size;
+        const int next_token = SampleMult(probabilities_data, vocab_size, RandomF32(kRngState));
+        std::cout << Decode(next_token);
+
+        auto x_cpu = x->To(Device(DeviceType::kCPU, 0));
+        auto *x_data = static_cast<int64_t *>(x_cpu.DataPtr());
+        for (uint32_t batch = 0; batch < batch_size; ++batch) {
+            if (t < sequence_length) {
+                x_data[batch * sequence_length + t] = next_token;
+            } else {
+                std::memmove(x_data + batch * sequence_length, x_data + batch * sequence_length + 1,
+                             (sequence_length - 1) * sizeof(int64_t));
+                x_data[(batch + 1) * sequence_length - 1] = next_token;
+            }
+        }
+        x = std::make_shared<infini_train::Tensor>(x_cpu.To(device));
     }
     std::cout << std::endl;
 }
