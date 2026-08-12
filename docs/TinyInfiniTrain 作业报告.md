@@ -44,12 +44,10 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 ```
 
 #### 解决思路
-保持名称与注册名称完全一致
-前向：NegForward
-反向：NegBackward
+
 
 #### 遇到问题
-误将 Dispatcher 的 key 写错
+
 
 
 ### 作业二：实现矩阵乘法
