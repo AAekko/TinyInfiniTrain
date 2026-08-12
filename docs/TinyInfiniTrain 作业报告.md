@@ -47,7 +47,7 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 `Neg` 本身不负责具体的数值计算，而是作为 autograd 层与设备 kernel 层之间的桥梁。前向传播首先检查输入张量数量为 1，再从输入张量取得设备类型，以 `(DeviceType, "NegForward")` 为键从 `Dispatcher` 中取得对应 kernel，最后通过 `KernelFunction::Call` 调用并将结果包装成单元素 `vector` 返回。反向传播采用相同流程，不过设备类型从上游梯度 `grad_output` 获取，并调用 `NegBackward` kernel。由于取反函数的导数恒为 `-1`，具体的梯度取反运算由已经提供的 kernel 完成，autograd 层只负责正确分发。
 
 #### 遇到问题
-刚开以为要在 `Neg::Forward` 和 `Neg::Backward` 中自己遍历张量并完成取反。后来注意到是通过 Dispatcher 找到已经注册好的 kernel。
+刚开始以为要在 `Neg::Forward` 和 `Neg::Backward` 中自己遍历张量并完成取反。后来注意到是通过 Dispatcher 找到已经注册好的 kernel。
 
 
 ### 作业二：实现矩阵乘法
