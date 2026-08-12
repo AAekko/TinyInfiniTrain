@@ -214,9 +214,9 @@ std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared
 
 将输入张量视为 `[..., M, K]`，另一个张量视为 `[..., K, N]`，输出形状为 `[..., M, N]`。实现时先检查两个张量的维数、批次维度和矩阵乘法的收缩维度是否匹配，再把前面的所有批次维度相乘得到 `batch_size`。
 
-CPU 端使用 Eigen 的 RowMajor `Map` 将每一批连续内存映射为矩阵，逐批计算 `C = A * B`。反向传播根据链式法则计算：```
+CPU 端使用 Eigen 的 RowMajor `Map` 将每一批连续内存映射为矩阵，逐批计算 `C = A * B`。反向传播根据链式法则计算：
 grad_input = grad_output * other^T
-grad_other = input^T * grad_output```
+grad_other = input^T * grad_output
 
 CUDA 端使用 `cublasSgemmStridedBatched` 一次处理所有批次。由于项目张量采用行主序，而 cuBLAS 按列主序解释矩阵，调用时利用 `(A * B)^T = B^T * A^T`，交换两个输入在 cuBLAS 接口中的位置，并将输出矩阵的行列参数写成 `N, M, K`。反向传播分别配置转置参数计算两个梯度，同时为输入、输出和批次设置正确的 leading dimension 与 stride。
 
@@ -284,13 +284,12 @@ void AdamAccumulateGrad(const std::shared_ptr<Tensor> &grad, const std::shared_p
 ```
 
 #### 解决思路
-Adam 对每个参数元素维护一阶矩 `m` 和二阶矩 `v`。第 `t` 次更新按照以下公式计算：```
+Adam 对每个参数元素维护一阶矩 `m` 和二阶矩 `v`。第 `t` 次更新按照以下公式计算：
 m = beta1 * m + (1 - beta1) * grad
 v = beta2 * v + (1 - beta2) * grad^2
 m_hat = m / (1 - beta1^t)
 v_hat = v / (1 - beta2^t)
-param = param - learning_rate * m_hat / (sqrt(v_hat) + eps)```
-
+param = param - learning_rate * m_hat / (sqrt(v_hat) + eps)
 CPU 端先计算两个偏差修正系数，再遍历张量元素，原地更新 `m`、`v` 和 `param`。CUDA 端实现一维 kernel，每个线程负责一个元素，通过 `blockIdx.x * blockDim.x + threadIdx.x` 得到下标，并进行越界检查；主机函数根据元素数量计算 grid 大小并传入张量设备指针。CPU 和 CUDA kernel 最后都以 `AdamAccumulateGrad` 名称注册到 Dispatcher，使优化器可以按参数所在设备调用相应实现。
 
 
